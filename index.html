@@ -76,6 +76,12 @@
                 max-width: 100%;
                 padding: 20px;
             }
+            #print-area.invoice-mode {
+                width: 100%;
+                max-width: 210mm; /* A4 width */
+                padding: 20mm;
+                font-family: 'Sarabun', 'IBM Plex Sans Thai', sans-serif;
+            }
             @page { margin: 0.5cm; }
         }
     </style>
@@ -1732,6 +1738,161 @@
         pa.innerHTML = html;
         setTimeout(() => window.print(), 200);
     }
+    
+    // --- ฟังก์ชันใบกำกับภาษี ---
+    window.openInvoiceModal = function(histId) {
+        const h = historyLogs.find(x => x.id === histId);
+        if (!h || h.type !== 'sell') return;
+        
+        const savedShop = JSON.parse(localStorage.getItem('invoiceShopInfo') || '{}');
+        
+        const html = `
+        <div class="px-2">
+            <div class="flex justify-between items-center mb-5">
+                <h2 class="text-xl font-black text-gray-800">พิมพ์ใบเสร็จรับเงิน (A4/A5)</h2>
+                <button onclick="window.hideModal()" class="text-gray-400 hover:text-gray-600 bg-gray-100 hover:bg-gray-200 p-2 rounded-xl transition-colors"><i class="ph ph-x text-lg"></i></button>
+            </div>
+            
+            <div class="space-y-4 max-h-[60vh] overflow-y-auto px-1 pb-4">
+                <div class="bg-blue-50 p-3 md:p-4 rounded-2xl border border-blue-100">
+                    <h3 class="font-bold text-blue-800 text-sm mb-3">ชื่อร้านค้า (หัวบิล)</h3>
+                    <div class="space-y-2">
+                        <input type="text" id="invShopName" placeholder="ชื่อร้านค้า (ถ้ามี)" value="${savedShop.name || ''}" class="w-full bg-white border border-blue-200 px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500 font-bold">
+                    </div>
+                </div>
+
+                <div class="bg-gray-50 p-3 md:p-4 rounded-2xl border border-gray-200">
+                    <h3 class="font-bold text-gray-800 text-sm mb-3">ข้อมูลลูกค้า (สำหรับลูกค้าที่ต้องการนำไปเบิก)</h3>
+                    <div class="space-y-2">
+                        <input type="text" id="invCustName" placeholder="ชื่อลูกค้า / บริษัท" class="w-full bg-white border border-gray-300 px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-gray-500 font-bold">
+                        <input type="text" id="invCustTax" placeholder="TAX ID (เลขประจำตัวผู้เสียภาษี)" class="w-full bg-white border border-gray-300 px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-gray-500 font-mono">
+                        <input type="text" id="invCustEmail" placeholder="E-mail (อีเมล)" class="w-full bg-white border border-gray-300 px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-gray-500">
+                        <textarea id="invCustAddr" placeholder="ที่อยู่โดยละเอียด" rows="2" class="w-full bg-white border border-gray-300 px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-gray-500"></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <button onclick="window.generateAndPrintInvoice(${h.id})" class="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-lg transition-transform active:scale-95 flex items-center justify-center gap-2">
+                <i class="ph ph-printer text-xl"></i> พิมพ์เอกสาร (A4/A5)
+            </button>
+        </div>
+        `;
+        window.showModal(html);
+    };
+
+    window.generateAndPrintInvoice = function(histId) {
+        const h = historyLogs.find(x => x.id === histId);
+        if (!h) return;
+
+        const shopInfo = {
+            name: document.getElementById('invShopName').value.trim()
+        };
+        const custInfo = {
+            name: document.getElementById('invCustName').value.trim() || 'ลูกค้าเงินสด',
+            addr: document.getElementById('invCustAddr').value.trim() || '-',
+            tax: document.getElementById('invCustTax').value.trim() || '-',
+            email: document.getElementById('invCustEmail').value.trim() || '-'
+        };
+
+        localStorage.setItem('invoiceShopInfo', JSON.stringify(shopInfo));
+
+        let subTotal = 0;
+        const changesArr = (h.changes || []).map(c => {
+            subTotal += (c.total || 0);
+            return c;
+        });
+        
+        const finalTotal = h.revenue || 0;
+        const discount = h.discount || 0;
+        const shipping = h.shipping || 0;
+        
+        const d = new Date(h.timestamp);
+        const dateStr = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+        const invoiceNo = `INV-${d.getFullYear()}${(d.getMonth() + 1).toString().padStart(2, '0')}${d.getDate().toString().padStart(2, '0')}-${String(h.id).slice(-4)}`;
+
+        let itemsHtml = changesArr.map((c, i) => `
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 5px; text-align: center;">${i + 1}</td>
+                <td style="padding: 12px 5px; font-weight: bold;">${c.name}</td>
+                <td style="padding: 12px 5px; text-align: center;">${window.formatQty(c.cartQty)}</td>
+                <td style="padding: 12px 5px; text-align: right;">${window.formatMoney(c.unitPrice)}</td>
+                <td style="padding: 12px 5px; text-align: right; font-weight: bold;">${window.formatMoney(c.total)}</td>
+            </tr>
+        `).join('');
+
+        const html = `
+        <div style="padding: 0; font-family: 'Sarabun', 'IBM Plex Sans Thai', sans-serif; color: #222; max-width: 210mm; margin: 0 auto; line-height: 1.5;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 25px; border-bottom: 2px solid #222; padding-bottom: 20px;">
+                <div style="flex: 1; padding-right: 20px;">
+                    ${shopInfo.name ? `<h1 style="font-size: 26px; font-weight: 800; margin: 0 0 10px 0; color: #111;">${shopInfo.name}</h1>` : ''}
+                </div>
+                <div style="text-align: right; width: 280px;">
+                    <h2 style="font-size: 22px; font-weight: 800; margin: 0 0 10px 0; color: #111;">ใบเสร็จรับเงิน / บิลเงินสด<br><span style="font-size: 14px; font-weight: normal; color: #666;">RECEIPT / CASH RECEIPT</span></h2>
+                    <table style="width: 100%; font-size: 14px; margin-top: 15px;">
+                        <tr><td style="text-align: left; padding: 2px 0;"><strong>เลขที่ (No):</strong></td><td style="text-align: right; font-weight: bold;">${invoiceNo}</td></tr>
+                        <tr><td style="text-align: left; padding: 2px 0;"><strong>วันที่ (Date):</strong></td><td style="text-align: right; font-weight: bold;">${dateStr}</td></tr>
+                    </table>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 25px; background-color: #f8fafc; padding: 15px 20px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                <h3 style="margin: 0 0 10px 0; font-size: 13px; color: #64748b; text-transform: uppercase;">ข้อมูลลูกค้า (Customer)</h3>
+                <p style="margin: 0; font-size: 16px; font-weight: 800; color: #0f172a;">${custInfo.name}</p>
+                ${custInfo.tax !== '-' ? `<p style="margin: 5px 0 0 0; font-size: 14px; color: #334155;"><strong>TAX ID:</strong> ${custInfo.tax}</p>` : ''}
+                ${custInfo.email !== '-' ? `<p style="margin: 2px 0 0 0; font-size: 14px; color: #334155;"><strong>E-mail:</strong> ${custInfo.email}</p>` : ''}
+                ${custInfo.addr !== '-' ? `<p style="margin: 2px 0 0 0; font-size: 14px; white-space: pre-wrap; color: #334155;"><strong>Address:</strong> ${custInfo.addr}</p>` : ''}
+            </div>
+
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 14px;">
+                <thead>
+                    <tr style="border-bottom: 2px solid #222; background-color: #f1f5f9;">
+                        <th style="padding: 12px 5px; text-align: center; width: 60px;">ลำดับ<br><span style="font-size:10px; font-weight:normal;">Item</span></th>
+                        <th style="padding: 12px 5px; text-align: left;">รายการสินค้า<br><span style="font-size:10px; font-weight:normal;">Description</span></th>
+                        <th style="padding: 12px 5px; text-align: center; width: 80px;">จำนวน<br><span style="font-size:10px; font-weight:normal;">Qty</span></th>
+                        <th style="padding: 12px 5px; text-align: right; width: 110px;">ราคา/หน่วย<br><span style="font-size:10px; font-weight:normal;">Unit Price</span></th>
+                        <th style="padding: 12px 5px; text-align: right; width: 130px;">จำนวนเงิน<br><span style="font-size:10px; font-weight:normal;">Amount</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${itemsHtml}
+                </tbody>
+            </table>
+
+            <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                <div style="flex: 1; padding-right: 40px;">
+                    ${h.note ? `<div style="font-size: 13px; color: #64748b; padding: 10px; background: #f8fafc; border-radius: 6px;"><strong>หมายเหตุ:</strong> ${h.note}</div>` : ''}
+                </div>
+                <table style="width: 320px; border-collapse: collapse; font-size: 14px;">
+                    <tr>
+                        <td style="padding: 6px 10px; text-align: right;">รวมเป็นเงิน (Sub Total)</td>
+                        <td style="padding: 6px 10px; text-align: right; font-weight: bold;">฿${window.formatMoney(subTotal)}</td>
+                    </tr>
+                    ${discount > 0 ? `
+                    <tr>
+                        <td style="padding: 6px 10px; text-align: right; color: #ef4444;">ส่วนลด (Discount)</td>
+                        <td style="padding: 6px 10px; text-align: right; color: #ef4444; font-weight: bold;">-฿${window.formatMoney(discount)}</td>
+                    </tr>` : ''}
+                    ${shipping > 0 ? `
+                    <tr>
+                        <td style="padding: 6px 10px; text-align: right;">ค่าจัดส่ง (Shipping)</td>
+                        <td style="padding: 6px 10px; text-align: right; font-weight: bold;">฿${window.formatMoney(shipping)}</td>
+                    </tr>` : ''}
+                    <tr style="border-top: 2px solid #222;">
+                        <td style="padding: 12px 10px; font-weight: 800; font-size: 18px; text-align: right;">รวมทั้งสิ้น (Grand Total)</td>
+                        <td style="padding: 12px 10px; font-weight: 800; font-size: 18px; text-align: right;">฿${window.formatMoney(finalTotal)}</td>
+                    </tr>
+                </table>
+            </div>
+
+        </div>
+        `;
+
+        window.hideModal();
+        const pa = document.getElementById('print-area');
+        pa.className = 'invoice-mode';
+        pa.innerHTML = html;
+        setTimeout(() => window.print(), 300);
+    };
 
     // --- โอนย้ายสต็อกหลายรายการ (Bulk Transfer) ---
     
@@ -2570,6 +2731,23 @@
                                 <span class="text-[10px] text-gray-500 font-bold whitespace-nowrap ml-2 bg-gray-100 px-2 py-1 rounded-lg">${timeStr}</span>
                             </div>
                             <p class="text-xs text-gray-500 mt-1.5 ${isUndone ? 'line-through' : ''} leading-relaxed">${h.detail}</p>
+                            ${(h.changes && h.changes.length > 0 && h.type !== 'delete') ? `
+                            <div class="mt-2 bg-gray-50/50 rounded-lg p-2 border border-gray-100">
+                                <ul class="text-[11px] text-gray-600 space-y-1 ${isUndone ? 'line-through opacity-70' : ''}">
+                                    ${h.changes.map(c => {
+                                        let itemName = c.name || (window.products && window.products.find(p => p.id === c.productId)?.name) || 'สินค้า (ไม่ทราบชื่อ)';
+                                        if (h.type === 'sell') return `<li>• ${itemName} <span class="font-bold">x${c.cartQty}</span> <span class="text-gray-400">(฿${window.formatMoney(c.total)})</span></li>`;
+                                        if (h.type === 'transfer') {
+                                            if (c.wDiff > 0) return `<li>• <span class="text-blue-600 font-bold">นำเข้าคลัง:</span> ${itemName} <span class="font-bold">+${c.wDiff}</span></li>`;
+                                            else if (c.sDiff > 0) return `<li>• <span class="text-green-600 font-bold">เบิกหน้าร้าน:</span> ${itemName} <span class="font-bold">+${c.sDiff}</span></li>`;
+                                            else return `<li>• ${itemName} (w:${c.wDiff}, s:${c.sDiff})</li>`;
+                                        }
+                                        if (h.type === 'adjust' || h.type === 'add') return `<li>• ${itemName} (คลัง: ${c.wDiff}, หน้าร้าน: ${c.sDiff})</li>`;
+                                        return '';
+                                    }).join('')}
+                                </ul>
+                            </div>
+                            ` : ''}
                             ${h.type === 'sell' && h.revenue !== undefined ? `<p class="text-xs text-green-600 font-bold mt-1">฿${window.formatMoney(h.revenue)} | กำไร ฿${window.formatMoney(h.profit || 0)}</p>` : ''}
                             ${h.type === 'sell' ? `<div class="flex items-center gap-1.5 mt-2 flex-wrap">
                                 <span class="text-[10px] font-black text-gray-900 bg-white px-2 py-0.5 rounded border border-gray-200 shadow-sm">฿${window.formatMoney(h.revenue || 0)}</span>
@@ -2583,6 +2761,9 @@
                         html += `
                             <button onclick="window.printPastReceipt(${h.id})" class="bg-white border-2 border-gray-100 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-600 text-gray-400 w-10 h-10 rounded-xl flex items-center justify-center transition-all shadow-sm" title="พิมพ์ใบเสร็จย้อนหลัง">
                                 <i class="ph ph-printer text-xl font-bold"></i>
+                            </button>
+                            <button onclick="window.openInvoiceModal(${h.id})" class="bg-white border-2 border-gray-100 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-600 text-gray-400 w-10 h-10 rounded-xl flex items-center justify-center transition-all shadow-sm" title="ออกใบกำกับภาษี">
+                                <i class="ph ph-file-text text-xl font-bold"></i>
                             </button>
                         `;
                     }
